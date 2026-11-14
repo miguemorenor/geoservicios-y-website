@@ -23,6 +23,7 @@ const geoserverUrl = "http://localhost:8080/geoserver/curso/wms";
 // Departamentos: visibles al iniciar.
 const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
   layers: "curso:departamentos",
+  cql_filter: "dpto_ccdgo = '41'",
   format: "image/png",
   transparent: true,
   version: "1.1.1",
@@ -32,6 +33,7 @@ const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
 // Municipios: se activan desde el control de capas.
 const municipiosWMS = L.tileLayer.wms(geoserverUrl, {
   layers: "curso:municipios",
+  cql_filter: "dpto_ccdgo = '41'",
   format: "image/png",
   transparent: true,
   version: "1.1.1",
@@ -69,6 +71,10 @@ fetch(wfsUrl)
   })
   .then(function (datos) {
     const departamentosGeoJSON = L.geoJSON(datos, {
+  // Código DANE del Huila: 41.
+  filter: function (feature) {
+    return String(feature.properties?.dpto_ccdgo) === "41";
+  },
       attribution: "DANE — Departamento Administrativo Nacional de Estadística",
       
       style: {
@@ -117,6 +123,19 @@ fetch(wfsUrl)
       departamentosGeoJSON,
       "Departamentos (WFS interactivo)"
     );
+
+    // Obtener la envolvente del Huila.
+const huilaBounds = departamentosGeoJSON.getBounds();
+
+// Restringir las teselas WMS a esa extensión.
+departamentosWMS.options.bounds = huilaBounds;
+departamentosWMS.redraw();
+
+municipiosWMS.options.bounds = huilaBounds;
+municipiosWMS.redraw();
+
+// Acercar el mapa al Huila.
+map.fitBounds(huilaBounds);
   })
   .catch(function (error) {
     console.error("Error cargando WFS:", error);
