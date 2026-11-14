@@ -74,3 +74,14 @@ body {
     font-size: 12px;
   }
 }
+
+#Etiquetas para las nuevas capas
+.etiqueta-entidad {
+  font-size: 12px;
+  font-weight: 600;
+  color: #16324f;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 4px 7px;
+}
