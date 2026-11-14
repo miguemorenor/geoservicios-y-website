@@ -25,7 +25,8 @@ const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
   layers: "curso:departamentos",
   format: "image/png",
   transparent: true,
-  version: "1.1.1"
+  version: "1.1.1",
+ attribution: "DANE — Departamento Administrativo Nacional de Estadística"
 }).addTo(map);
 
 // Municipios: se activan desde el control de capas.
@@ -33,7 +34,8 @@ const municipiosWMS = L.tileLayer.wms(geoserverUrl, {
   layers: "curso:municipios",
   format: "image/png",
   transparent: true,
-  version: "1.1.1"
+  version: "1.1.1",
+  attribution: "DANE — Departamento Administrativo Nacional de Estadística"
 });
 
 // Control para activar y desactivar las capas.
@@ -67,9 +69,11 @@ fetch(wfsUrl)
   })
   .then(function (datos) {
     const departamentosGeoJSON = L.geoJSON(datos, {
+      attribution: "DANE — Departamento Administrativo Nacional de Estadística",
+      
       style: {
         color: "#145da0",
-        weight: 2,
+        weight: 1,
         fillColor: "#8cc8ff",
         fillOpacity: 0.15
       },
@@ -96,7 +100,7 @@ fetch(wfsUrl)
 
           layer.setStyle({
             color: "#ff7800",
-            weight: 4,
+            weight: 2,
             fillOpacity: 0.35
           });
         });
