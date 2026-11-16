@@ -1,6 +1,9 @@
 // Crear el mapa centrado en Colombia.
 const map = L.map("map").setView([4.5709, -74.2973], 6);
 
+const fuenteDANE =
+  "DANE — Departamento Administrativo Nacional de Estadística";
+
 // Agregar el mapa base de OpenStreetMap.
 const osm = L.tileLayer(
   "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -17,60 +20,163 @@ L.control.scale({
   imperial: false
 }).addTo(map);
 
-// Dirección del servicio WMS de nuestro GeoServer.
-const geoserverUrl = "http://localhost:8080/geoserver/curso/wms";
-
-// Departamentos: visibles al iniciar.
-const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
-  layers: "curso:departamentos",
-  format: "image/png",
-  transparent: true,
-  version: "1.1.1",
- attribution: "DANE — Departamento Administrativo Nacional de Estadística"
-}).addTo(map);
-
-// Municipios: se activan desde el control de capas.
-const municipiosWMS = L.tileLayer.wms(geoserverUrl, {
-  layers: "curso:municipios",
-  format: "image/png",
-  transparent: true,
-  version: "1.1.1",
-  attribution: "DANE — Departamento Administrativo Nacional de Estadística"
-});
+// Mantener los municipios debajo de los departamentos interactivos.
+map.createPane("municipios");
+map.getPane("municipios").style.zIndex = 390;
 
 // Control para activar y desactivar las capas.
 const controlCapas = L.control.layers(
   {
     "OpenStreetMap": osm
   },
-  {
-    "Departamentos (WMS)": departamentosWMS,
-    "Municipios (WMS)": municipiosWMS
-  },
+  {},
   {
     collapsed: true
   }
 ).addTo(map);
 
-// Cargar departamentos con geometrías y atributos desde WFS.
-const wfsUrl =
-  "http://localhost:8080/geoserver/curso/wfs" +
-  "?service=WFS&version=2.0.0&request=GetFeature" +
-  "&typeNames=curso:departamentos" +
-  "&outputFormat=application/json&srsName=EPSG:4326";
+let departamentosGeoJSON;
+let municipiosGeoJSON;
+let estadoDepartamentos = "Cargando departamentos…";
 
-fetch(wfsUrl)
-  .then(function (respuesta) {
-    if (!respuesta.ok) {
-      throw new Error("Error HTTP: " + respuesta.status);
-    }
+// Panel de información.
+const info = L.control({ position: "topleft" });
 
-    return respuesta.json();
-  })
+info.onAdd = function () {
+  this.contenedor = L.DomUtil.create("div", "info");
+  L.DomEvent.disableClickPropagation(this.contenedor);
+  this.update();
+  return this.contenedor;
+};
+
+info.update = function (propiedades) {
+  this.contenedor.replaceChildren();
+
+  const titulo = document.createElement("h4");
+  titulo.textContent = "Departamentos de Colombia";
+
+  const detalle = document.createElement("div");
+
+  detalle.textContent = propiedades
+    ? `${propiedades.dpto_cnmbr ?? "Sin nombre"} · Código: ${
+        propiedades.dpto_ccdgo ?? "No disponible"
+      }`
+    : estadoDepartamentos;
+
+  this.contenedor.append(titulo, detalle);
+};
+
+info.addTo(map);
+
+// Leyenda independiente de GeoServer.
+const leyenda = L.control({ position: "bottomright" });
+
+leyenda.onAdd = function () {
+  this.contenedor = L.DomUtil.create("div", "info legend");
+
+  L.DomEvent.disableClickPropagation(this.contenedor);
+
+  this.update();
+  return this.contenedor;
+};
+
+leyenda.update = function () {
+  this.contenedor.replaceChildren();
+
+  const titulo = document.createElement("h4");
+  titulo.textContent = "Leyenda";
+  this.contenedor.append(titulo);
+
+  const agregarFila = (texto, color) => {
+    const fila = document.createElement("div");
+    fila.className = "legend-row";
+    fila.style.display = "flex";
+    fila.style.alignItems = "center";
+    fila.style.gap = "8px";
+    fila.style.marginBottom = "6px";
+
+    const simbolo = document.createElement("span");
+    simbolo.style.display = "inline-block";
+    simbolo.style.width = "24px";
+    simbolo.style.flexShrink = "0";
+    simbolo.style.borderTop = "2px solid " + color;
+
+    const etiqueta = document.createElement("span");
+    etiqueta.textContent = texto;
+
+    fila.append(simbolo, etiqueta);
+    this.contenedor.append(fila);
+  };
+
+  if (
+    departamentosGeoJSON &&
+    map.hasLayer(departamentosGeoJSON)
+  ) {
+    agregarFila("Departamentos (GeoJSON)", "#145da0");
+    agregarFila("Departamento resaltado", "#ff7800");
+  }
+
+  if (
+    municipiosGeoJSON &&
+    map.hasLayer(municipiosGeoJSON)
+  ) {
+    agregarFila("Municipios (GeoJSON)", "#319b48");
+  }
+
+  const fuente = document.createElement("div");
+  fuente.textContent = "Fuente: DANE";
+  fuente.style.fontSize = "11px";
+  fuente.style.marginTop = "6px";
+
+  this.contenedor.append(fuente);
+};
+
+leyenda.addTo(map);
+
+// Actualizar la leyenda al activar o desactivar capas.
+map.on("overlayadd overlayremove", function () {
+  leyenda.update();
+
+  if (
+    departamentosGeoJSON &&
+    !map.hasLayer(departamentosGeoJSON)
+  ) {
+    info.update();
+  }
+});
+
+// Leer y comprobar un archivo GeoJSON.
+async function leerGeoJSON(ruta) {
+  const respuesta = await fetch(ruta);
+
+  if (!respuesta.ok) {
+    throw new Error(
+      "No se pudo cargar " + ruta +
+      ". Error HTTP: " + respuesta.status
+    );
+  }
+
+  const datos = await respuesta.json();
+
+  if (
+    datos.type !== "FeatureCollection" ||
+    !Array.isArray(datos.features) ||
+    datos.features.length === 0
+  ) {
+    throw new Error(
+      "El archivo " + ruta + " no contiene entidades válidas."
+    );
+  }
+
+  return datos;
+}
+
+// Cargar todos los departamentos de Colombia.
+leerGeoJSON("datos/departamentos.geojson")
   .then(function (datos) {
-    const departamentosGeoJSON = L.geoJSON(datos, {
-      attribution: "DANE — Departamento Administrativo Nacional de Estadística",
-      
+    departamentosGeoJSON = L.geoJSON(datos, {
+      attribution: fuenteDANE,
+
       style: {
         color: "#145da0",
         weight: 1,
@@ -89,14 +195,15 @@ fetch(wfsUrl)
 
         const codigo = document.createElement("div");
         codigo.textContent =
-          "Código: " + (propiedades.dpto_ccdgo ?? "No disponible");
+          "Código: " +
+          (propiedades.dpto_ccdgo ?? "No disponible");
 
         contenido.append(nombre, codigo);
         layer.bindPopup(contenido);
 
         // Resaltar al pasar el cursor.
         layer.on("mouseover", function () {
-            info.update(propiedades);
+          info.update(propiedades);
 
           layer.setStyle({
             color: "#ff7800",
@@ -111,115 +218,60 @@ fetch(wfsUrl)
           info.update();
         });
       }
-    }).addTo(map);
+    });
+
+    departamentosGeoJSON.addTo(map);
 
     controlCapas.addOverlay(
       departamentosGeoJSON,
-      "Departamentos (WFS interactivo)"
+      "Departamentos (GeoJSON)"
     );
+
+    estadoDepartamentos =
+      "Pasa el cursor sobre un departamento.";
+
+    info.update();
+    leyenda.update();
   })
   .catch(function (error) {
-    console.error("Error cargando WFS:", error);
-    alert("No se pudo cargar WFS. Revisaremos la consola del navegador.");
+    console.error("Error cargando departamentos:", error);
+
+    estadoDepartamentos =
+      "No se pudieron cargar los departamentos. " +
+      "Revisa el archivo datos/departamentos.geojson.";
+
+    info.update();
   });
 
-  // Panel de información.
-const info = L.control({ position: "topleft" });
+// Cargar todos los municipios de Colombia.
+// Se muestran únicamente al activarlos en el control de capas.
+leerGeoJSON("datos/municipios.geojson")
+  .then(function (datos) {
+    municipiosGeoJSON = L.geoJSON(datos, {
+      attribution: fuenteDANE,
+      pane: "municipios",
+      interactive: false,
 
-info.onAdd = function () {
-  this.contenedor = L.DomUtil.create("div", "info");
-  L.DomEvent.disableClickPropagation(this.contenedor);
-  this.update();
-  return this.contenedor;
-};
-
-info.update = function (propiedades) {
-  this.contenedor.replaceChildren();
-
-  const titulo = document.createElement("h4");
-  titulo.textContent = "Departamentos de Colombia";
-
-  const detalle = document.createElement("div");
-  detalle.textContent = propiedades
-    ? `${propiedades.dpto_cnmbr ?? "Sin nombre"} · Código: ${
-        propiedades.dpto_ccdgo ?? "No disponible"
-      }`
-    : "Pasa el cursor sobre un departamento.";
-
-  this.contenedor.append(titulo, detalle);
-};
-
-info.addTo(map);
-
-// Leyenda del mapa.
-const leyenda = L.control({ position: "bottomright" });
-
-leyenda.onAdd = function () {
-  const div = L.DomUtil.create("div", "info legend");
-
-  div.innerHTML = `
-    <h4>Leyenda</h4>
-
-    <div class="legend-row">
-      <span class="legend-line" style="border-color: #145da0"></span>
-      Departamentos WFS
-    </div>
-
-    <div class="legend-row">
-      <span class="legend-line" style="border-color: #ff7800"></span>
-      Departamento resaltado
-    </div>
-
-    <div id="leyenda-departamentos-wms">
-      <strong>Departamentos WMS</strong>
-    </div>
-
-    <div id="leyenda-municipios-wms">
-      <strong>Municipios WMS</strong>
-    </div>
-  `;
-
-  // Obtener la simbología real de GeoServer.
-  function agregarImagen(contenedor, nombreCapa) {
-    const imagen = document.createElement("img");
-
-    imagen.src = geoserverUrl +
-      "?service=WMS&version=1.1.1" +
-      "&request=GetLegendGraphic&format=image/png" +
-      "&layer=curso:" + nombreCapa;
-
-    imagen.alt = "Simbología de " + nombreCapa;
-    contenedor.append(imagen);
-  }
-
-  const departamentos = div.querySelector("#leyenda-departamentos-wms");
-  const municipios = div.querySelector("#leyenda-municipios-wms");
-
-  agregarImagen(departamentos, "departamentos");
-  agregarImagen(municipios, "municipios");
-
-  function actualizar() {
-    departamentos.hidden = !map.hasLayer(departamentosWMS);
-    municipios.hidden = !map.hasLayer(municipiosWMS);
-
-    let wfsActivo = false;
-
-    map.eachLayer(function (capa) {
-      if (capa instanceof L.GeoJSON) {
-        wfsActivo = true;
+      style: {
+        color: "#319b48",
+        weight: 1,
+        opacity: 0.85,
+        fill: false
       }
     });
 
-    div.querySelectorAll(".legend-row").forEach(function (fila) {
-      fila.style.display = wfsActivo ? "flex" : "none";
-    });
-  }
+    controlCapas.addOverlay(
+      municipiosGeoJSON,
+      "Municipios (GeoJSON)"
+    );
 
- map.on("layeradd layerremove overlayadd overlayremove", actualizar);
-  actualizar();
+    leyenda.update();
+  })
+  .catch(function (error) {
+    console.error("Error cargando municipios:", error);
 
-  L.DomEvent.disableClickPropagation(div);
-  return div;
-};
-
-leyenda.addTo(map);
+    alert(
+      "No se pudieron cargar los municipios. " +
+      "Revisa el archivo datos/municipios.geojson."
+    );
+  });
