@@ -1,7 +1,11 @@
 // Crear el mapa centrado en el Huila.
 const map = L.map("map").setView([2.5359, -75.5277], 8);
 
-// Agregar el mapa base de OpenStreetMap.
+const CODIGO_HUILA = "41";
+const fuenteDANE =
+  "DANE — Departamento Administrativo Nacional de Estadística";
+
+// Mapa base.
 const osm = L.tileLayer(
   "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   {
@@ -11,62 +15,38 @@ const osm = L.tileLayer(
   }
 ).addTo(map);
 
-// Mostrar una escala en metros y kilómetros.
+// Escala.
 L.control.scale({
   metric: true,
   imperial: false
 }).addTo(map);
 
-// Dirección del servicio WMS de nuestro GeoServer.
-const geoserverUrl =
-  "http://localhost:8080/geoserver/curso/wms";
+// Orden de las capas.
+// Las capas adicionales quedan encima del departamento.
+map.createPane("municipios");
+map.getPane("municipios").style.zIndex = 410;
 
-// Departamentos: visibles al iniciar.
-const departamentosWMS = L.tileLayer.wms(geoserverUrl, {
-  layers: "curso:departamentos",
-  format: "image/png",
-  transparent: true,
-  version: "1.1.1",
-  attribution:
-    "DANE — Departamento Administrativo Nacional de Estadística"
-}).addTo(map);
+map.createPane("tematicas");
+map.getPane("tematicas").style.zIndex = 420;
 
-// Municipios: se activan desde el control de capas.
-const municipiosWMS = L.tileLayer.wms(geoserverUrl, {
-  layers: "curso:municipios",
-  format: "image/png",
-  transparent: true,
-  version: "1.1.1",
-  attribution:
-    "DANE — Departamento Administrativo Nacional de Estadística"
-});
-
-// Control para activar y desactivar las capas.
+// Control de capas.
 const controlCapas = L.control.layers(
-  {
-    "OpenStreetMap": osm
-  },
-  {
-    "Departamentos (WMS)": departamentosWMS,
-    "Municipios (WMS)": municipiosWMS
-  },
-  {
-    collapsed: true
-  }
+  { "OpenStreetMap": osm },
+  {},
+  { collapsed: true }
 ).addTo(map);
 
+const capasRegistradas = [];
+let departamentosGeoJSON;
+let estado = "Cargando el departamento del Huila…";
+
 // Panel de información.
-const info = L.control({
-  position: "topleft"
-});
+const info = L.control({ position: "topleft" });
 
 info.onAdd = function () {
   this.contenedor = L.DomUtil.create("div", "info");
-
   L.DomEvent.disableClickPropagation(this.contenedor);
-
   this.update();
-
   return this.contenedor;
 };
 
@@ -74,44 +54,217 @@ info.update = function (propiedades) {
   this.contenedor.replaceChildren();
 
   const titulo = document.createElement("h4");
-  titulo.textContent = "Colombia — Vista inicial: Huila";
+  titulo.textContent = "Huila — Visor geográfico";
 
   const detalle = document.createElement("div");
-
   detalle.textContent = propiedades
-    ? `${propiedades.dpto_cnmbr ?? "Sin nombre"} · Código: ${
-        propiedades.dpto_ccdgo ?? "No disponible"
+    ? `${propiedades.dpto_cnmbr ?? "HUILA"} · Código: ${
+        propiedades.dpto_ccdgo ?? CODIGO_HUILA
       }`
-    : "Pasa el cursor sobre un departamento.";
+    : estado;
 
   this.contenedor.append(titulo, detalle);
 };
 
 info.addTo(map);
 
-// Cargar departamentos con geometrías y atributos desde WFS.
-const wfsUrl =
-  "http://localhost:8080/geoserver/curso/wfs" +
-  "?service=WFS&version=2.0.0&request=GetFeature" +
-  "&typeNames=curso:departamentos" +
-  "&outputFormat=application/json&srsName=EPSG:4326";
+// Leyenda sin imágenes de GeoServer.
+const leyenda = L.control({ position: "bottomright" });
 
-fetch(wfsUrl)
-  .then(function (respuesta) {
-    if (!respuesta.ok) {
-      throw new Error("Error HTTP: " + respuesta.status);
+leyenda.onAdd = function () {
+  this.contenedor = L.DomUtil.create("div", "info legend");
+
+  L.DomEvent.disableClickPropagation(this.contenedor);
+  L.DomEvent.disableScrollPropagation(this.contenedor);
+
+  this.update();
+  return this.contenedor;
+};
+
+leyenda.update = function () {
+  this.contenedor.replaceChildren();
+
+  const titulo = document.createElement("h4");
+  titulo.textContent = "Leyenda";
+  this.contenedor.append(titulo);
+
+  const agregarFila = (nombre, color, punto) => {
+    const fila = document.createElement("div");
+    fila.className = "legend-row";
+
+    const simbolo = document.createElement("span");
+
+    if (punto) {
+      simbolo.style.cssText =
+        "display:inline-block;width:9px;height:9px;" +
+        "border-radius:50%;flex-shrink:0;";
+      simbolo.style.backgroundColor = color;
+    } else {
+      simbolo.className = "legend-line";
+      simbolo.style.borderColor = color;
+      simbolo.style.flexShrink = "0";
     }
 
-    return respuesta.json();
-  })
-  .then(function (datos) {
-    const departamentosGeoJSON = L.geoJSON(datos, {
-      attribution:
-        "DANE — Departamento Administrativo Nacional de Estadística",
+    const texto = document.createElement("span");
+    texto.textContent = nombre;
+
+    fila.append(simbolo, texto);
+    this.contenedor.append(fila);
+  };
+
+  capasRegistradas.forEach(function (registro) {
+    if (map.hasLayer(registro.capa)) {
+      agregarFila(
+        registro.nombre,
+        registro.color,
+        registro.punto
+      );
+    }
+  });
+
+  if (
+    departamentosGeoJSON &&
+    map.hasLayer(departamentosGeoJSON)
+  ) {
+    agregarFila("Departamento resaltado", "#ff7800", false);
+  }
+
+  const fuente = document.createElement("div");
+  fuente.style.fontSize = "11px";
+  fuente.style.marginTop = "8px";
+  fuente.textContent = "Límites administrativos: DANE";
+
+  this.contenedor.append(fuente);
+};
+
+leyenda.addTo(map);
+
+map.on("overlayadd overlayremove", function () {
+  leyenda.update();
+  info.update();
+});
+
+// Registrar una capa en el selector y la leyenda.
+function registrarCapa(capa, nombre, color, punto, visible) {
+  capasRegistradas.push({
+    capa: capa,
+    nombre: nombre,
+    color: color,
+    punto: punto
+  });
+
+  controlCapas.addOverlay(capa, nombre);
+
+  if (visible) {
+    capa.addTo(map);
+  }
+
+  leyenda.update();
+}
+
+// Leer un archivo GeoJSON del repositorio.
+async function leerGeoJSON(ruta) {
+  const respuesta = await fetch(ruta);
+
+  if (!respuesta.ok) {
+    throw new Error(
+      ruta + " — Error HTTP: " + respuesta.status
+    );
+  }
+
+  const datos = await respuesta.json();
+
+  if (
+    datos.type !== "FeatureCollection" ||
+    !Array.isArray(datos.features) ||
+    datos.features.length === 0
+  ) {
+    throw new Error("GeoJSON vacío o inválido: " + ruta);
+  }
+
+  return datos;
+}
+
+// Seleccionar únicamente entidades del Huila.
+function seleccionarHuila(datos) {
+  const entidades = datos.features.filter(function (feature) {
+    return (
+      String(feature.properties?.dpto_ccdgo ?? "").trim() ===
+      CODIGO_HUILA
+    );
+  });
+
+  if (entidades.length === 0) {
+    throw new Error(
+      "No se encontraron entidades con dpto_ccdgo = 41."
+    );
+  }
+
+  return {
+    type: "FeatureCollection",
+    features: entidades
+  };
+}
+
+// Crear una ventana de atributos sin interpretar HTML.
+function crearPopup(titulo, propiedades) {
+  const contenido = document.createElement("div");
+  contenido.style.maxHeight = "220px";
+  contenido.style.overflowY = "auto";
+
+  const encabezado = document.createElement("strong");
+  encabezado.textContent = titulo;
+  contenido.append(encabezado);
+
+  Object.entries(propiedades).forEach(function ([campo, valor]) {
+    if (valor === null || valor === undefined || valor === "") {
+      return;
+    }
+
+    const fila = document.createElement("div");
+    fila.textContent = campo + ": " + String(valor);
+    contenido.append(fila);
+  });
+
+  return contenido;
+}
+
+// Agregar una etiqueta al pasar el cursor.
+function agregarEtiqueta(layer, texto) {
+  if (texto === null || texto === undefined) {
+    return;
+  }
+
+  const etiqueta = String(texto).trim();
+
+  if (!etiqueta) {
+    return;
+  }
+
+  const contenido = document.createElement("span");
+  contenido.textContent = etiqueta;
+
+  layer.bindTooltip(contenido, {
+    permanent: false,
+    sticky: true,
+    direction: "auto",
+    className: "etiqueta-entidad"
+  });
+}
+
+// Departamento del Huila.
+async function cargarDepartamento() {
+  try {
+    const datos = seleccionarHuila(
+      await leerGeoJSON("datos/departamentos.geojson")
+    );
+
+    departamentosGeoJSON = L.geoJSON(datos, {
+      attribution: fuenteDANE,
 
       style: {
         color: "#145da0",
-        weight: 1,
+        weight: 1.5,
         fillColor: "#8cc8ff",
         fillOpacity: 0.15
       },
@@ -119,142 +272,247 @@ fetch(wfsUrl)
       onEachFeature: function (feature, layer) {
         const propiedades = feature.properties || {};
 
-        const contenido = document.createElement("div");
+        layer.bindPopup(
+          crearPopup("Departamento del Huila", {
+            Nombre: propiedades.dpto_cnmbr,
+            Código: propiedades.dpto_ccdgo
+          })
+        );
 
-        const nombre = document.createElement("strong");
-        nombre.textContent =
-          propiedades.dpto_cnmbr ?? "Nombre no disponible";
-
-        const codigo = document.createElement("div");
-        codigo.textContent =
-          "Código: " + (propiedades.dpto_ccdgo ?? "No disponible");
-
-        contenido.append(nombre, codigo);
-
-        layer.bindPopup(contenido);
-
-        // Resaltar al pasar el cursor.
         layer.on("mouseover", function () {
           info.update(propiedades);
 
           layer.setStyle({
             color: "#ff7800",
             weight: 2,
-            fillOpacity: 0.35
+            fillOpacity: 0.3
           });
         });
 
-        // Recuperar el estilo al retirar el cursor.
         layer.on("mouseout", function () {
           departamentosGeoJSON.resetStyle(layer);
           info.update();
         });
       }
-    }).addTo(map);
+    });
 
-    controlCapas.addOverlay(
+    registrarCapa(
       departamentosGeoJSON,
-      "Departamentos (WFS interactivo)"
+      "Huila (GeoJSON)",
+      "#145da0",
+      false,
+      true
     );
-  })
-  .catch(function (error) {
-    console.error("Error cargando WFS:", error);
 
-    alert(
-      "No se pudo cargar WFS. Comprueba que GeoServer esté " +
-      "encendido y revisa la consola del navegador."
-    );
-  });
+    // Obtener la envolvente y encuadrar el departamento.
+    const huilaBounds = departamentosGeoJSON.getBounds();
 
-// Leyenda del mapa.
-const leyenda = L.control({
-  position: "bottomright"
-});
+    if (huilaBounds.isValid()) {
+      map.fitBounds(huilaBounds, { padding: [20, 20] });
+    }
 
-leyenda.onAdd = function () {
-  const div = L.DomUtil.create("div", "info legend");
-
-  div.innerHTML = `
-    <h4>Leyenda</h4>
-
-    <div class="legend-row">
-      <span
-        class="legend-line"
-        style="border-color: #145da0"
-      ></span>
-      Departamentos WFS
-    </div>
-
-    <div class="legend-row">
-      <span
-        class="legend-line"
-        style="border-color: #ff7800"
-      ></span>
-      Departamento resaltado
-    </div>
-
-    <div id="leyenda-departamentos-wms">
-      <strong>Departamentos WMS</strong>
-    </div>
-
-    <div id="leyenda-municipios-wms">
-      <strong>Municipios WMS</strong>
-    </div>
-  `;
-
-  // Obtener la simbología real de GeoServer.
-  function agregarImagen(contenedor, nombreCapa) {
-    const imagen = document.createElement("img");
-
-    imagen.src =
-      geoserverUrl +
-      "?service=WMS&version=1.1.1" +
-      "&request=GetLegendGraphic&format=image/png" +
-      "&layer=curso:" + nombreCapa;
-
-    imagen.alt = "Simbología de " + nombreCapa;
-
-    contenedor.append(imagen);
+    estado = "Pasa el cursor sobre el Huila.";
+    info.update();
+  } catch (error) {
+    console.error("Error cargando Huila:", error);
+    estado = "No se pudo cargar el Huila: " + error.message;
+    info.update();
   }
+}
 
-  const departamentos = div.querySelector(
-    "#leyenda-departamentos-wms"
-  );
+// Municipios pertenecientes al Huila.
+async function cargarMunicipios() {
+  try {
+    const datos = seleccionarHuila(
+      await leerGeoJSON("datos/municipios.geojson")
+    );
 
-  const municipios = div.querySelector(
-    "#leyenda-municipios-wms"
-  );
+    const municipiosGeoJSON = L.geoJSON(datos, {
+      attribution: fuenteDANE,
+      pane: "municipios",
 
-  agregarImagen(departamentos, "departamentos");
-  agregarImagen(municipios, "municipios");
+      style: {
+        color: "#319b48",
+        weight: 1,
+        fill: false
+      },
 
-  function actualizar() {
-    departamentos.hidden = !map.hasLayer(departamentosWMS);
-    municipios.hidden = !map.hasLayer(municipiosWMS);
+      onEachFeature: function (feature, layer) {
+        const propiedades = feature.properties || {};
 
-    let wfsActivo = false;
+        layer.bindPopup(
+          crearPopup("Municipio del Huila", {
+            Nombre: propiedades.mpio_cnmbr,
+            Código:
+              propiedades.mpio_cdpmp ??
+              propiedades.mpio_ccdgo,
+            Departamento: propiedades.dpto_cnmbr
+          })
+        );
 
-    map.eachLayer(function (capa) {
-      if (capa instanceof L.GeoJSON) {
-        wfsActivo = true;
+        agregarEtiqueta(layer, propiedades.mpio_cnmbr);
       }
     });
 
-    div.querySelectorAll(".legend-row").forEach(function (fila) {
-      fila.style.display = wfsActivo ? "flex" : "none";
-    });
+    registrarCapa(
+      municipiosGeoJSON,
+      "Municipios del Huila",
+      "#319b48",
+      false,
+      false
+    );
+  } catch (error) {
+    console.error("Error cargando municipios:", error);
+    alert("No se pudieron cargar los municipios: " + error.message);
+  }
+}
+
+// Capas adicionales disponibles en datos/41_HUILA.
+const capasAdicionales = [
+  {
+    archivo: "Administrativo_P",
+    nombre: "Puntos administrativos",
+    color: "#7c3aed",
+    punto: true
+  },
+  {
+    archivo: "Administrativo_R",
+    nombre: "Áreas administrativas",
+    color: "#9333ea"
+  },
+  {
+    archivo: "Bosque",
+    nombre: "Bosques",
+    color: "#15803d"
+  },
+  {
+    archivo: "Construccion_P",
+    nombre: "Construcciones",
+    color: "#dc2626",
+    punto: true
+  },
+  {
+    archivo: "Curva_Nivel",
+    nombre: "Curvas de nivel",
+    color: "#a16207"
+  },
+  {
+    archivo: "Drenaje_Sencillo",
+    nombre: "Drenajes",
+    color: "#0284c7"
+  },
+  {
+    archivo: "Isla",
+    nombre: "Islas",
+    color: "#ca8a04"
+  },
+  {
+    archivo: "Laguna",
+    nombre: "Lagunas",
+    color: "#2563eb"
+  },
+  {
+    archivo: "Orografia",
+    nombre: "Orografía",
+    color: "#92400e",
+    punto: true
+  },
+  {
+    archivo: "Via",
+    nombre: "Vías",
+    color: "#c2410c"
+  }
+];
+
+// Cargar una capa adicional y sus etiquetas.
+async function cargarCapaAdicional(configuracion) {
+  const ruta =
+    "datos/41_HUILA/" + configuracion.archivo + ".geojson";
+
+  const datos = await leerGeoJSON(ruta);
+
+  const capa = L.geoJSON(datos, {
+    pane: "tematicas",
+
+    style: {
+      color: configuracion.color,
+      weight: 1.2,
+      opacity: 0.9,
+      fillColor: configuracion.color,
+      fillOpacity: 0.2
+    },
+
+    pointToLayer: function (feature, latlng) {
+      return L.circleMarker(latlng, {
+        pane: "tematicas",
+        radius: 4,
+        color: configuracion.color,
+        weight: 1,
+        fillColor: configuracion.color,
+        fillOpacity: 0.8
+      });
+    },
+
+    onEachFeature: function (feature, layer) {
+      const propiedades = feature.properties || {};
+
+      layer.bindPopup(
+        crearPopup(configuracion.nombre, propiedades)
+      );
+
+      if (configuracion.archivo === "Curva_Nivel") {
+        const altura = propiedades.ALTURA_SOB;
+
+        if (
+          altura !== null &&
+          altura !== undefined &&
+          altura !== ""
+        ) {
+          agregarEtiqueta(layer, "Elevación: " + altura);
+        }
+      } else {
+        // Incluye orografía y drenajes con nombre disponible.
+        agregarEtiqueta(layer, propiedades.NOMBRE_GEO);
+      }
+    }
+  });
+
+  registrarCapa(
+    capa,
+    configuracion.nombre,
+    configuracion.color,
+    configuracion.punto || false,
+    false
+  );
+}
+
+// Iniciar la carga.
+async function iniciarVisor() {
+  await cargarDepartamento();
+  await cargarMunicipios();
+
+  const archivosFallidos = [];
+
+  for (const configuracion of capasAdicionales) {
+    try {
+      await cargarCapaAdicional(configuracion);
+    } catch (error) {
+      console.error(
+        "Error cargando " + configuracion.nombre + ":",
+        error
+      );
+
+      archivosFallidos.push(configuracion.archivo);
+    }
   }
 
-  map.on(
-    "layeradd layerremove overlayadd overlayremove",
-    actualizar
-  );
+  if (archivosFallidos.length > 0) {
+    alert(
+      "No se pudieron cargar estas capas adicionales:\n" +
+      archivosFallidos.join("\n") +
+      "\nRevisa sus archivos en datos/41_HUILA."
+    );
+  }
+}
 
-  actualizar();
-
-  L.DomEvent.disableClickPropagation(div);
-
-  return div;
-};
-
-leyenda.addTo(map);
+iniciarVisor();
